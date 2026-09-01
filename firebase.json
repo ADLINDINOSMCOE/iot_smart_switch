@@ -1,0 +1,44 @@
+{
+  "firestore": {
+    "rules": "firestore.rules"
+  },
+  "flutter": {
+    "platforms": {
+      "android": {
+        "default": {
+          "projectId": "iot-switch-23826",
+          "appId": "1:853694975111:android:ae3f123829a89b0dd73c22",
+          "fileOutput": "android/app/google-services.json"
+        }
+      },
+      "ios": {
+        "default": {
+          "projectId": "iot-switch-23826",
+          "appId": "1:853694975111:ios:bc0f7c4821e1a711d73c22",
+          "uploadDebugSymbols": false,
+          "fileOutput": "ios/Runner/GoogleService-Info.plist"
+        }
+      },
+      "macos": {
+        "default": {
+          "projectId": "iot-switch-23826",
+          "appId": "1:853694975111:ios:bc0f7c4821e1a711d73c22",
+          "uploadDebugSymbols": false,
+          "fileOutput": "macos/Runner/GoogleService-Info.plist"
+        }
+      },
+      "dart": {
+        "lib/firebase_options.dart": {
+          "projectId": "iot-switch-23826",
+          "configurations": {
+            "android": "1:853694975111:android:ae3f123829a89b0dd73c22",
+            "ios": "1:853694975111:ios:bc0f7c4821e1a711d73c22",
+            "macos": "1:853694975111:ios:bc0f7c4821e1a711d73c22",
+            "web": "1:853694975111:web:ad8cd820df43e604d73c22",
+            "windows": "1:853694975111:web:e59632fe6b3280bcd73c22"
+          }
+        }
+      }
+    }
+  }
+}

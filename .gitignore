@@ -1,0 +1,72 @@
+# Miscellaneous
+*.class
+*.log
+*.pyc
+*.swp
+.DS_Store
+.atom/
+.build/
+.buildlog/
+.history
+.svn/
+.swiftpm/
+migrate_working_dir/
+
+# IntelliJ related
+*.iml
+*.ipr
+*.iws
+.idea/
+
+# VS Code
+.vscode/
+
+# Flutter/Dart/Pub related
+**/doc/api/
+**/ios/Flutter/.last_build_id
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.pub-cache/
+.pub/
+/build/
+
+# Symbolication & Obfuscation
+app.*.symbols
+app.*.map.json
+
+# Android Studio artifacts
+/android/app/debug
+/android/app/profile
+/android/app/release
+
+# ==============================================================================
+# SECURITY & SECRETS PROTECTION
+# ==============================================================================
+# Environment files containing local secrets
+.env
+.env.*
+!.env.example
+
+# Hardware credentials & ESP32 secrets
+secrets.h
+esp32/secrets.h
+*.secrets
+
+# Certificates, Keys & Private Tokens
+*.pem
+*.key
+*.crt
+*.cert
+*.p12
+*.keystore
+*.jks
+
+# Firebase & Cloud Service Account credentials
+serviceAccountKey.json
+*firebase-adminsdk*.json
+google-services-private.json
+
+# Temp & backup files
+*.backup
+firepit-log.txt

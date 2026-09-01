@@ -1,0 +1,252 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // =========================================================================
+    // CORE AUTHENTICATION & ROLE HELPERS
+    // =========================================================================
+
+    // Verify user is authenticated with Firebase Auth
+    function isAuthenticated() {
+      return request.auth != null && request.auth.uid != null;
+    }
+
+    // Check if the authenticated user is the immutable owner of the switch
+    function isOwner(data) {
+      return isAuthenticated() && data.ownerId == request.auth.uid;
+    }
+
+    // Check if the authenticated user has 'editor' (control) permission
+    function isEditor(data) {
+      return isAuthenticated() && (
+        (data.sharedWith is map && data.sharedWith[request.auth.uid] == 'editor') ||
+        (data.sharedWith is map && data.sharedWith[request.auth.uid] == 'control')
+      );
+    }
+
+    // Check if the authenticated user has 'viewer' (read-only) permission
+    function isViewer(data) {
+      return isAuthenticated() && (
+        (data.sharedWith is map && data.sharedWith[request.auth.uid] == 'viewer') ||
+        (data.sharedWith is map && data.sharedWith[request.auth.uid] == 'view only')
+      );
+    }
+
+    // Check if user has read access (Owner, Editor, or Viewer)
+    function canReadDevice(data) {
+      return isOwner(data) || isEditor(data) || isViewer(data) ||
+        (data.sharedWithUids is list && request.auth.uid in data.sharedWithUids);
+    }
+
+    // Check if user has control/write access (Owner or Editor)
+    function canControlDevice(data) {
+      return isOwner(data) || isEditor(data);
+    }
+
+    // Fetch parent switch document for subcollection authorization
+    function getParentSwitch(deviceId) {
+      return get(/databases/$(database)/documents/switches/$(deviceId)).data;
+    }
+
+    // Verify valid deviceId string format (alphanumeric, hyphens, underscores, 3-50 chars)
+    function isValidDeviceId(id) {
+      return id is string && id.size() >= 3 && id.size() <= 50 && id.matches('^[a-zA-Z0-9_-]+$');
+    }
+
+    // =========================================================================
+    // USERS COLLECTION (/users/{userId})
+    // =========================================================================
+    match /users/{userId} {
+      // Authenticated users can search / view user summary for device sharing
+      allow read: if isAuthenticated();
+
+      // Only the user themselves can create or update their own profile
+      allow create, update: if isAuthenticated()
+        && request.auth.uid == userId
+        && request.resource.data.uid == userId
+        && request.resource.data.email is string
+        && request.resource.data.email.size() <= 100
+        && (!('displayName' in request.resource.data) || (request.resource.data.displayName is string && request.resource.data.displayName.size() <= 80))
+        && (!('photoUrl' in request.resource.data) || (request.resource.data.photoUrl is string && request.resource.data.photoUrl.size() <= 500));
+
+      // User profile deletion is allowed only for the account owner
+      allow delete: if isAuthenticated() && request.auth.uid == userId;
+    }
+
+    // =========================================================================
+    // SWITCHES COLLECTION (/switches/{deviceId})
+    // =========================================================================
+    match /switches/{deviceId} {
+      // READ: Allowed only for Owner or authorized Shared Users (Editor / Viewer)
+      allow read: if canReadDevice(resource.data);
+
+      // CREATE: Authenticated user creating a new device must set themselves as owner
+      allow create: if isAuthenticated()
+        && isValidDeviceId(deviceId)
+        && request.resource.data.deviceId == deviceId
+        && request.resource.data.ownerId == request.auth.uid
+        && request.resource.data.name is string
+        && request.resource.data.name.size() > 0
+        && request.resource.data.name.size() <= 60
+        && request.resource.data.room is string
+        && request.resource.data.room.size() <= 60
+        && request.resource.data.isOn is bool
+        && (!('online' in request.resource.data) || request.resource.data.online is bool)
+        && (!('sharedWith' in request.resource.data) || request.resource.data.sharedWith is map)
+        && (!('sharedWithUids' in request.resource.data) || (request.resource.data.sharedWithUids is list && request.resource.data.sharedWithUids.size() <= 50))
+        && (!('sharedUsers' in request.resource.data) || (request.resource.data.sharedUsers is list && request.resource.data.sharedUsers.size() <= 50))
+        && (!('timerActive' in request.resource.data) || request.resource.data.timerActive is bool);
+
+      // UPDATE:
+      // Case 1: Owner Update - Full management rights, but ownerId and deviceId are strictly IMMUTABLE
+      // Case 2: Editor Update - Restricted to toggling relay, timers, and timestamps. Cannot alter ownership, permissions, or device metadata.
+      // Case 3: Viewers and unauthorized users are DENIED.
+      allow update: if isAuthenticated() && (
+        // OWNER UPDATE:
+        (
+          isOwner(resource.data)
+          && request.resource.data.ownerId == resource.data.ownerId // ownerId cannot be changed
+          && request.resource.data.deviceId == resource.data.deviceId // deviceId cannot be changed
+          && request.resource.data.name is string
+          && request.resource.data.name.size() > 0
+          && request.resource.data.name.size() <= 60
+          && request.resource.data.room is string
+          && request.resource.data.room.size() <= 60
+          && request.resource.data.isOn is bool
+          && (!('online' in request.resource.data) || request.resource.data.online is bool)
+          && (!('timerActive' in request.resource.data) || request.resource.data.timerActive is bool)
+          && (!('sharedWith' in request.resource.data) || request.resource.data.sharedWith is map)
+          && (!('sharedWithUids' in request.resource.data) || (request.resource.data.sharedWithUids is list && request.resource.data.sharedWithUids.size() <= 50))
+          && (!('sharedUsers' in request.resource.data) || (request.resource.data.sharedUsers is list && request.resource.data.sharedUsers.size() <= 50))
+        )
+        ||
+        // SHARED EDITOR UPDATE (Strictly constrained fields):
+        (
+          isEditor(resource.data)
+          && request.resource.data.ownerId == resource.data.ownerId // cannot tamper owner
+          && request.resource.data.deviceId == resource.data.deviceId // cannot tamper device ID
+          && request.resource.data.name == resource.data.name // cannot change device name
+          && request.resource.data.room == resource.data.room // cannot change device room
+          && request.resource.data.sharedWith == resource.data.sharedWith // cannot change permissions
+          && request.resource.data.sharedWithUids == resource.data.sharedWithUids // cannot add users
+          && request.resource.data.sharedUsers == resource.data.sharedUsers // cannot modify shared user list
+          && request.resource.data.isOn is bool
+          && (!('timerActive' in request.resource.data) || request.resource.data.timerActive is bool)
+          && request.resource.data.lastUpdatedBy == request.auth.uid
+        )
+      );
+
+      // DELETE: Only the device owner can delete the device
+      allow delete: if isOwner(resource.data);
+
+      // -----------------------------------------------------------------------
+      // SUBCOLLECTION: SCHEDULES (/switches/{deviceId}/schedules/{scheduleId})
+      // -----------------------------------------------------------------------
+      match /schedules/{scheduleId} {
+        allow read: if canReadDevice(getParentSwitch(deviceId));
+
+        allow create: if canControlDevice(getParentSwitch(deviceId))
+          && request.resource.data.createdBy == request.auth.uid
+          && request.resource.data.deviceId == deviceId
+          && request.resource.data.hour is int
+          && request.resource.data.hour >= 0 && request.resource.data.hour <= 23
+          && request.resource.data.minute is int
+          && request.resource.data.minute >= 0 && request.resource.data.minute <= 59
+          && request.resource.data.action is string
+          && request.resource.data.days is list
+          && request.resource.data.days.size() <= 7
+          && request.resource.data.enabled is bool;
+
+        allow update: if canControlDevice(getParentSwitch(deviceId))
+          && request.resource.data.deviceId == deviceId
+          && (!('hour' in request.resource.data) || (request.resource.data.hour is int && request.resource.data.hour >= 0 && request.resource.data.hour <= 23))
+          && (!('minute' in request.resource.data) || (request.resource.data.minute is int && request.resource.data.minute >= 0 && request.resource.data.minute <= 59))
+          && (!('enabled' in request.resource.data) || request.resource.data.enabled is bool);
+
+        allow delete: if isOwner(getParentSwitch(deviceId))
+          || (isEditor(getParentSwitch(deviceId)) && resource.data.createdBy == request.auth.uid);
+      }
+
+      // -----------------------------------------------------------------------
+      // SUBCOLLECTION: TIMER HISTORY (/switches/{deviceId}/timerHistory/{historyId})
+      // -----------------------------------------------------------------------
+      match /timerHistory/{historyId} {
+        allow read: if canReadDevice(getParentSwitch(deviceId));
+
+        allow create: if canControlDevice(getParentSwitch(deviceId))
+          && request.resource.data.startedBy == request.auth.uid
+          && request.resource.data.status is string;
+
+        allow update: if canControlDevice(getParentSwitch(deviceId))
+          && request.resource.data.status is string;
+
+        allow delete: if isOwner(getParentSwitch(deviceId));
+      }
+
+      // -----------------------------------------------------------------------
+      // SUBCOLLECTION: COMMANDS (/switches/{deviceId}/commands/{commandId})
+      // -----------------------------------------------------------------------
+      match /commands/{commandId} {
+        allow read: if canReadDevice(getParentSwitch(deviceId));
+
+        allow create: if canControlDevice(getParentSwitch(deviceId))
+          && request.resource.data.requestedBy == request.auth.uid
+          && request.resource.data.deviceId == deviceId
+          && request.resource.data.action in ['TURN_ON', 'TURN_OFF', 'SET_TIMER', 'CANCEL_TIMER', 'TOGGLE']
+          && request.resource.data.status is string;
+
+        allow update: if canControlDevice(getParentSwitch(deviceId));
+
+        allow delete: if isOwner(getParentSwitch(deviceId));
+      }
+
+      // -----------------------------------------------------------------------
+      // SUBCOLLECTION: DEVICE AUDIT LOGS (/switches/{deviceId}/deviceLogs/{logId})
+      // -----------------------------------------------------------------------
+      match /deviceLogs/{logId} {
+        allow read: if isOwner(getParentSwitch(deviceId));
+
+        // Audit logs can only be created by authorized users of this switch
+        allow create: if canControlDevice(getParentSwitch(deviceId))
+          && request.resource.data.userId == request.auth.uid
+          && request.resource.data.deviceId == deviceId
+          && request.resource.data.event is string
+          && request.resource.data.event.size() <= 100;
+
+        // Audit logs are append-only and strictly immutable
+        allow update, delete: if false;
+      }
+    }
+
+    // =========================================================================
+    // LEGACY COMPATIBILITY COLLECTIONS (Scoped to current authenticated user)
+    // =========================================================================
+    match /timers/{timerId} {
+      allow read: if isAuthenticated() && (
+        resource.data.userId == request.auth.uid ||
+        resource.data.startedBy == request.auth.uid
+      );
+      allow create: if isAuthenticated() && (
+        request.resource.data.userId == request.auth.uid ||
+        request.resource.data.startedBy == request.auth.uid
+      );
+      allow update, delete: if isAuthenticated() && (
+        resource.data.userId == request.auth.uid ||
+        resource.data.startedBy == request.auth.uid
+      );
+    }
+
+    match /schedules/{scheduleId} {
+      allow read: if isAuthenticated() && resource.data.createdBy == request.auth.uid;
+      allow create: if isAuthenticated() && request.resource.data.createdBy == request.auth.uid;
+      allow update, delete: if isAuthenticated() && resource.data.createdBy == request.auth.uid;
+    }
+
+    // =========================================================
+    // DENY ALL OTHER ACCESS BY DEFAULT
+    // =========================================================
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

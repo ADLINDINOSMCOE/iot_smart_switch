@@ -1,0 +1,54 @@
+{
+  "project_info": {
+    "project_number": "853694975111",
+    "project_id": "iot-switch-23826",
+    "storage_bucket": "iot-switch-23826.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:853694975111:android:ae3f123829a89b0dd73c22",
+        "android_client_info": {
+          "package_name": "com.example.iotswitch"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "853694975111-7t386mcho0pd1dptguf552hvlg60dq6v.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.example.iotswitch",
+            "certificate_hash": "90c2c3dd714615541c9df0aa91fd3feee2d56768"
+          }
+        },
+        {
+          "client_id": "853694975111-7gaqqkjoa9gr567fs432s3e90ptt4a69.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAcAa9VA30WefSE6ApM-KdMyj-Wyprv-2g"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "853694975111-7gaqqkjoa9gr567fs432s3e90ptt4a69.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "853694975111-djatfueqm11rtt3q61ipitcl3t20eh6u.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.example.iotswitch"
+              }
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
