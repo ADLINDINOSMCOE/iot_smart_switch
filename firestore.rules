@@ -1,0 +1,112 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Helper functions for security and authentication checks
+    function isAuthenticated() {
+      return request.auth != null && request.auth.uid != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function canAccessSwitch(switchData) {
+      return isAuthenticated() && (
+        !('ownerId' in switchData) ||
+        switchData.ownerId == null ||
+        switchData.ownerId == request.auth.uid
+      );
+    }
+
+    function canAccessSchedule(scheduleData) {
+      return isAuthenticated() && (
+        !('userId' in scheduleData) ||
+        scheduleData.userId == null ||
+        scheduleData.userId == request.auth.uid
+      );
+    }
+
+    function canAccessLog(logData) {
+      return isAuthenticated() && (
+        !('userId' in logData) ||
+        logData.userId == null ||
+        logData.userId == request.auth.uid
+      );
+    }
+
+    // 1. User private profiles and FCM tokens (Strict per-user isolation)
+    match /users/{userId} {
+      allow read, write: if isOwner(userId);
+    }
+
+    // 2. Switches Collection (Device Authorization & Field-Level Locks)
+    match /switches/{switchId} {
+      // Authenticated owners (or legacy shared fixtures) can read
+      allow read: if isAuthenticated() && canAccessSwitch(resource.data);
+
+      // State toggles: Authenticated owners can update ONLY the 'isOn' field.
+      // Modifying deviceId, ownerId, name, or room is strictly forbidden to prevent hijacking.
+      allow update: if isAuthenticated() &&
+        canAccessSwitch(resource.data) &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['isOn']) &&
+        request.resource.data.isOn is bool;
+
+      // Creation / Seeding: Must contain required schema fields
+      allow create: if isAuthenticated() &&
+        request.resource.data.keys().hasAll(['name', 'room', 'isOn', 'deviceId']) &&
+        request.resource.data.name is string &&
+        request.resource.data.room is string &&
+        request.resource.data.isOn is bool &&
+        request.resource.data.deviceId is string &&
+        (!('ownerId' in request.resource.data) || request.resource.data.ownerId == request.auth.uid);
+
+      // Deletion: Restricted strictly to switch owner
+      allow delete: if isAuthenticated() && canAccessSwitch(resource.data);
+    }
+
+    // 3. Schedules and Timers Collection (User-Scoped Automations)
+    match /schedules/{scheduleId} {
+      allow read: if isAuthenticated() && canAccessSchedule(resource.data);
+
+      // Creation requires strict schema validation
+      allow create: if isAuthenticated() &&
+        request.resource.data.keys().hasAll(['switchId', 'action', 'time', 'type', 'status']) &&
+        request.resource.data.switchId is string &&
+        request.resource.data.action in ['on', 'off'] &&
+        request.resource.data.type in ['timer', 'schedule'] &&
+        request.resource.data.status in ['pending', 'completed', 'cancelled'] &&
+        (!('userId' in request.resource.data) || request.resource.data.userId == request.auth.uid);
+
+      // Updating status (e.g. user cancels schedule or cloud completes timer)
+      allow update: if isAuthenticated() &&
+        canAccessSchedule(resource.data) &&
+        request.resource.data.status in ['pending', 'completed', 'cancelled'];
+
+      allow delete: if isAuthenticated() && canAccessSchedule(resource.data);
+    }
+
+    // 4. Devices Collection (Telemetry & Hardware State)
+    match /devices/{deviceId} {
+      // Authenticated users can view hardware online status and actual relay telemetry
+      allow read: if isAuthenticated();
+
+      // Telemetry writes from hardware / backend
+      allow write: if isAuthenticated() || (
+        request.resource.data.keys().hasAny(['lastSeen', 'actualStates', 'isOfflineNotified'])
+      );
+    }
+
+    // 5. Activity Audit Logs (Tuya / Smart Life Grade Audit Trail)
+    match /activity_logs/{logId} {
+      allow read: if isAuthenticated() && canAccessLog(resource.data);
+      allow create: if isAuthenticated();
+      allow update, delete: if false; // Immutable audit log
+    }
+
+    // Deny all other collections by default
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

@@ -1,0 +1,7 @@
+# Firmware build artifacts
+.pio/
+.vscode/
+
+# Local sensitive configuration
+include/secrets.h
+src/secrets.h
