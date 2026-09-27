@@ -22,25 +22,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
         child: ListView(
           padding: const EdgeInsets.fromLTRB(16, 20, 16, 30),
           children: [
-            // TITLE
-            const Text(
-              'Settings',
-              style: TextStyle(
-                color: Colors.white,
-                fontSize: 26,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-
-            const SizedBox(height: 6),
-
-            const Text(
-              'Manage your app and device settings',
-              style: TextStyle(
-                color: Color(0xFF91A1AF),
-                fontSize: 14,
-              ),
-            ),
 
             const SizedBox(height: 28),
 

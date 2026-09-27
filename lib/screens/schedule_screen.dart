@@ -364,19 +364,6 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
                   24,
                 ),
                 children: [
-                  const SizedBox(
-                    height: 42,
-                    child: Center(
-                      child: Text(
-                        'Schedule',
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontSize: 24,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                    ),
-                  ),
                   const SizedBox(height: 18),
                   _buildCreateScheduleCard(selectedSwitch),
                   const SizedBox(height: 26),
