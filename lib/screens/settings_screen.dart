@@ -1,13 +1,12 @@
 import 'package:flutter/material.dart';
+import 'notification_settings_screen.dart';
 
 class SettingsScreen extends StatefulWidget {
-  final VoidCallback? onShareDevice;
-  final VoidCallback? onManageDevices;
+  final VoidCallback onBack;
 
   const SettingsScreen({
     super.key,
-    this.onShareDevice,
-    this.onManageDevices,
+    required this.onBack,
   });
 
   @override
@@ -15,9 +14,6 @@ class SettingsScreen extends StatefulWidget {
 }
 
 class _SettingsScreenState extends State<SettingsScreen> {
-  bool _notificationsEnabled = true;
-  bool _timerAlertsEnabled = true;
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -59,14 +55,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   icon: Icons.share_outlined,
                   title: 'Share Device',
                   subtitle: 'Give access to another user',
-                  onTap: widget.onShareDevice ??
-                      () {
-                        _showInfoDialog(
-                          context,
-                          title: 'Share Device',
-                          content: 'Open a switch from the Home tab or tap the share icon to invite collaborators as Editors or Viewers.',
-                        );
-                      },
+                  onTap: () {
+                    _showInfoDialog(
+                      context,
+                      title: 'Share Device',
+                      content:
+                      'Open a switch from the Home tab or tap the share icon to invite collaborators as Editors or Viewers.',
+                    );
+                  },
                 ),
 
                 _buildDivider(),
@@ -75,14 +71,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   icon: Icons.devices_other_outlined,
                   title: 'Manage Devices',
                   subtitle: 'View and manage connected switches',
-                  onTap: widget.onManageDevices ??
-                      () {
-                        _showInfoDialog(
-                          context,
-                          title: 'Manage Devices',
-                          content: 'All your owned and shared smart switches are listed on the Home dashboard. You can add new switches using the + button.',
-                        );
-                      },
+                  onTap: () {
+                    _showInfoDialog(
+                      context,
+                      title: 'Manage Devices',
+                      content:
+                      'All your owned and shared smart switches are listed on the Home dashboard. You can add new switches using the + button.',
+                    );
+                  },
                 ),
               ],
             ),
@@ -99,9 +95,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 _buildSettingsTile(
                   icon: Icons.notifications_outlined,
                   title: 'Notifications',
-                  subtitle: _notificationsEnabled ? 'Enabled' : 'Disabled',
+                  subtitle: 'Configure notification preferences',
                   onTap: () {
-                    _showNotificationsDialog(context);
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (context) => const NotificationSettingsScreen(),
+                      ),
+                    );
                   },
                 ),
 
@@ -285,53 +286,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
-  void _showNotificationsDialog(BuildContext context) {
-    showDialog(
-      context: context,
-      builder: (dialogContext) {
-        return StatefulBuilder(
-          builder: (context, setModalState) {
-            return AlertDialog(
-              backgroundColor: const Color(0xFF10293B),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-              title: const Text('Notification Preferences', style: TextStyle(color: Colors.white)),
-              content: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  SwitchListTile(
-                    title: const Text('Device State Alerts', style: TextStyle(color: Colors.white, fontSize: 14)),
-                    subtitle: const Text('Notify when a switch is turned ON or OFF', style: TextStyle(color: Color(0xFF91A1AF), fontSize: 12)),
-                    value: _notificationsEnabled,
-                    activeColor: const Color(0xFF5AA9FF),
-                    onChanged: (val) {
-                      setModalState(() => _notificationsEnabled = val);
-                      setState(() => _notificationsEnabled = val);
-                    },
-                  ),
-                  SwitchListTile(
-                    title: const Text('Timer & Schedule Alerts', style: TextStyle(color: Colors.white, fontSize: 14)),
-                    subtitle: const Text('Notify when active timers complete', style: TextStyle(color: Color(0xFF91A1AF), fontSize: 12)),
-                    value: _timerAlertsEnabled,
-                    activeColor: const Color(0xFF5AA9FF),
-                    onChanged: (val) {
-                      setModalState(() => _timerAlertsEnabled = val);
-                      setState(() => _timerAlertsEnabled = val);
-                    },
-                  ),
-                ],
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.pop(dialogContext),
-                  child: const Text('Done', style: TextStyle(color: Color(0xFF5AA9FF))),
-                ),
-              ],
-            );
-          },
-        );
-      },
-    );
-  }
+
 
   void _showAppearanceDialog(BuildContext context) {
     _showInfoDialog(

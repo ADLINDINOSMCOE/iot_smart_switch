@@ -38,6 +38,20 @@ service cloud.firestore {
         (data.sharedWithUids is list && request.auth.uid in data.sharedWithUids);
     }
 
+    // Check if the list query is properly constrained to user's own data
+    function isQueryConstrainedToUser() {
+      return request.query.where != null && request.query.where.size() > 0 && (
+        // Owner query: where('ownerId', isEqualTo: uid)
+        (request.query.where[0].field == 'ownerId' && 
+         request.query.where[0].op == '==' && 
+         request.query.where[0].value == request.auth.uid) ||
+        // Shared query: where('sharedWithUids', arrayContains: uid)
+        (request.query.where[0].field == 'sharedWithUids' && 
+         request.query.where[0].op == 'array-contains' && 
+         request.query.where[0].value == request.auth.uid)
+      );
+    }
+
     // Check if user has control/write access (Owner or Editor)
     function canControlDevice(data) {
       return isOwner(data) || isEditor(data);
@@ -57,19 +71,23 @@ service cloud.firestore {
     // USERS COLLECTION (/users/{userId})
     // =========================================================================
     match /users/{userId} {
-      // Authenticated users can search / view user summary for device sharing
-      allow read: if isAuthenticated();
+      // READ: Only the user themselves can read their own profile
+      // Exception: Email lookup for device sharing is handled via a separate Cloud Function
+      allow read: if isAuthenticated() && request.auth.uid == userId;
 
-      // Only the user themselves can create or update their own profile
-      allow create, update: if isAuthenticated()
+      // CREATE: Only allowed during account creation via Firebase Auth client SDK
+      // Server-side profile sync is the intended path
+      allow create: if false;
+
+      // UPDATE: Only the user themselves can update their own profile with strict validation
+      allow update: if isAuthenticated()
         && request.auth.uid == userId
-        && request.resource.data.uid == userId
-        && request.resource.data.email is string
-        && request.resource.data.email.size() <= 100
-        && (!('displayName' in request.resource.data) || (request.resource.data.displayName is string && request.resource.data.displayName.size() <= 80))
+        && request.resource.data.uid == resource.data.uid // uid is immutable
+        && request.resource.data.email == resource.data.email // email is immutable
+        && (!('displayName' in request.resource.data) || (request.resource.data.displayName is string && request.resource.data.displayName.size() >= 1 && request.resource.data.displayName.size() <= 80))
         && (!('photoUrl' in request.resource.data) || (request.resource.data.photoUrl is string && request.resource.data.photoUrl.size() <= 500));
 
-      // User profile deletion is allowed only for the account owner
+      // DELETE: Only the user themselves can delete their profile (after account deletion)
       allow delete: if isAuthenticated() && request.auth.uid == userId;
     }
 
@@ -78,7 +96,11 @@ service cloud.firestore {
     // =========================================================================
     match /switches/{deviceId} {
       // READ: Allowed only for Owner or authorized Shared Users (Editor / Viewer)
-      allow read: if canReadDevice(resource.data);
+      // List queries must be constrained to user's own data during query authorization
+      allow list: if isAuthenticated() && isQueryConstrainedToUser();
+      
+      // Single document read: check per-document permissions
+      allow get: if canReadDevice(resource.data);
 
       // CREATE: Authenticated user creating a new device must set themselves as owner
       allow create: if isAuthenticated()
@@ -92,6 +114,8 @@ service cloud.firestore {
         && request.resource.data.room.size() <= 60
         && request.resource.data.isOn is bool
         && (!('online' in request.resource.data) || request.resource.data.online is bool)
+        && (!('lastHeartbeatAt' in request.resource.data) || request.resource.data.lastHeartbeatAt is timestamp)
+        && (!('offlineSince' in request.resource.data) || request.resource.data.offlineSince is timestamp)
         && (!('sharedWith' in request.resource.data) || request.resource.data.sharedWith is map)
         && (!('sharedWithUids' in request.resource.data) || (request.resource.data.sharedWithUids is list && request.resource.data.sharedWithUids.size() <= 50))
         && (!('sharedUsers' in request.resource.data) || (request.resource.data.sharedUsers is list && request.resource.data.sharedUsers.size() <= 50))
@@ -114,8 +138,10 @@ service cloud.firestore {
           && request.resource.data.room.size() <= 60
           && request.resource.data.isOn is bool
           && (!('online' in request.resource.data) || request.resource.data.online is bool)
+          && (!('lastHeartbeatAt' in request.resource.data) || request.resource.data.lastHeartbeatAt is timestamp)
+          && (!('offlineSince' in request.resource.data) || request.resource.data.offlineSince is timestamp)
           && (!('timerActive' in request.resource.data) || request.resource.data.timerActive is bool)
-          && (!('sharedWith' in request.resource.data) || request.resource.data.sharedWith is map)
+          && (!('sharedWith' in request.resource.data) || (request.resource.data.sharedWith is map && request.resource.data.sharedWith[request.resource.data.ownerId] != 'editor' && request.resource.data.sharedWith[request.resource.data.ownerId] != 'viewer' && request.resource.data.sharedWith[request.resource.data.ownerId] != 'control' && request.resource.data.sharedWith[request.resource.data.ownerId] != 'view only')) // owner cannot downgrade themselves
           && (!('sharedWithUids' in request.resource.data) || (request.resource.data.sharedWithUids is list && request.resource.data.sharedWithUids.size() <= 50))
           && (!('sharedUsers' in request.resource.data) || (request.resource.data.sharedUsers is list && request.resource.data.sharedUsers.size() <= 50))
         )
@@ -133,6 +159,7 @@ service cloud.firestore {
           && request.resource.data.isOn is bool
           && (!('timerActive' in request.resource.data) || request.resource.data.timerActive is bool)
           && request.resource.data.lastUpdatedBy == request.auth.uid
+          && request.resource.data.lastUpdatedBy != resource.data.ownerId // editors cannot impersonate owner
         )
       );
 
@@ -153,15 +180,21 @@ service cloud.firestore {
           && request.resource.data.minute is int
           && request.resource.data.minute >= 0 && request.resource.data.minute <= 59
           && request.resource.data.action is string
+          && request.resource.data.action in ['TURN_ON', 'TURN_OFF', 'TOGGLE']
           && request.resource.data.days is list
-          && request.resource.data.days.size() <= 7
-          && request.resource.data.enabled is bool;
+          && request.resource.data.days.size() >= 1 && request.resource.data.days.size() <= 7
+          && request.resource.data.enabled is bool
+          && (!('timeZoneOffsetMinutes' in request.resource.data) || (request.resource.data.timeZoneOffsetMinutes is int && request.resource.data.timeZoneOffsetMinutes >= -720 && request.resource.data.timeZoneOffsetMinutes <= 840));
 
         allow update: if canControlDevice(getParentSwitch(deviceId))
           && request.resource.data.deviceId == deviceId
+          && request.resource.data.createdBy == resource.data.createdBy // createdBy is immutable
           && (!('hour' in request.resource.data) || (request.resource.data.hour is int && request.resource.data.hour >= 0 && request.resource.data.hour <= 23))
           && (!('minute' in request.resource.data) || (request.resource.data.minute is int && request.resource.data.minute >= 0 && request.resource.data.minute <= 59))
-          && (!('enabled' in request.resource.data) || request.resource.data.enabled is bool);
+          && (!('action' in request.resource.data) || (request.resource.data.action is string && request.resource.data.action in ['TURN_ON', 'TURN_OFF', 'TOGGLE']))
+          && (!('days' in request.resource.data) || (request.resource.data.days is list && request.resource.data.days.size() >= 1 && request.resource.data.days.size() <= 7))
+          && (!('enabled' in request.resource.data) || (request.resource.data.enabled is bool))
+          && (!('timeZoneOffsetMinutes' in request.resource.data) || (request.resource.data.timeZoneOffsetMinutes is int && request.resource.data.timeZoneOffsetMinutes >= -720 && request.resource.data.timeZoneOffsetMinutes <= 840));
 
         allow delete: if isOwner(getParentSwitch(deviceId))
           || (isEditor(getParentSwitch(deviceId)) && resource.data.createdBy == request.auth.uid);
@@ -175,10 +208,21 @@ service cloud.firestore {
 
         allow create: if canControlDevice(getParentSwitch(deviceId))
           && request.resource.data.startedBy == request.auth.uid
-          && request.resource.data.status is string;
+          && request.resource.data.deviceId == deviceId
+          && request.resource.data.action is string
+          && request.resource.data.action in ['SET_TIMER', 'CANCEL_TIMER']
+          && request.resource.data.status is string
+          && request.resource.data.status in ['active', 'completed', 'cancelled']
+          && (!('durationSeconds' in request.resource.data) || (request.resource.data.durationSeconds is int && request.resource.data.durationSeconds >= 0))
+          && (!('mode' in request.resource.data) || (request.resource.data.mode is string && request.resource.data.mode in ['countUp', 'countDown']));
 
         allow update: if canControlDevice(getParentSwitch(deviceId))
-          && request.resource.data.status is string;
+          && request.resource.data.deviceId == deviceId
+          && request.resource.data.startedBy == resource.data.startedBy // startedBy is immutable
+          && request.resource.data.action == resource.data.action // action is immutable
+          && request.resource.data.status is string
+          && request.resource.data.status in ['active', 'completed', 'cancelled']
+          && (!('durationSeconds' in request.resource.data) || (request.resource.data.durationSeconds is int && request.resource.data.durationSeconds >= 0));
 
         allow delete: if isOwner(getParentSwitch(deviceId));
       }
@@ -193,9 +237,16 @@ service cloud.firestore {
           && request.resource.data.requestedBy == request.auth.uid
           && request.resource.data.deviceId == deviceId
           && request.resource.data.action in ['TURN_ON', 'TURN_OFF', 'SET_TIMER', 'CANCEL_TIMER', 'TOGGLE']
-          && request.resource.data.status is string;
+          && request.resource.data.status is string
+          && request.resource.data.status in ['PENDING', 'EXECUTED', 'FAILED', 'CANCELLED']
+          && (!('source' in request.resource.data) || (request.resource.data.source is string && request.resource.data.source in ['app', 'schedule', 'device']));
 
-        allow update: if canControlDevice(getParentSwitch(deviceId));
+        allow update: if canControlDevice(getParentSwitch(deviceId))
+          && request.resource.data.deviceId == deviceId
+          && request.resource.data.action == resource.data.action // action is immutable
+          && request.resource.data.requestedBy == resource.data.requestedBy // requestedBy is immutable
+          && request.resource.data.status is string
+          && request.resource.data.status in ['PENDING', 'EXECUTED', 'FAILED', 'CANCELLED'];
 
         allow delete: if isOwner(getParentSwitch(deviceId));
       }

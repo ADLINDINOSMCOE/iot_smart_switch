@@ -81,6 +81,10 @@ class SwitchDevice {
   final bool timerActive;
   final DateTime? timerStartedAt;
   final int timerDurationSeconds;
+  final DateTime? lastHeartbeatAt;
+  final DateTime? offlineSince;
+  final int totalRuntimeSeconds; // Total accumulated runtime in seconds
+  final double energyConsumptionKwh; // Estimated energy consumption in kWh
 
   SwitchDevice({
     required this.id,
@@ -99,6 +103,10 @@ class SwitchDevice {
     this.timerActive = false,
     this.timerStartedAt,
     this.timerDurationSeconds = 0,
+    this.lastHeartbeatAt,
+    this.offlineSince,
+    this.totalRuntimeSeconds = 0,
+    this.energyConsumptionKwh = 0.0,
   });
 
   DeviceRole getRoleForUser(String? uid) {
@@ -180,6 +188,10 @@ class SwitchDevice {
       timerActive: data['timerActive'] == true,
       timerStartedAt: parseDate(data['timerStartedAt']),
       timerDurationSeconds: (data['timerDurationSeconds'] as num?)?.toInt() ?? 0,
+      lastHeartbeatAt: parseDate(data['lastHeartbeatAt']),
+      offlineSince: parseDate(data['offlineSince']),
+      totalRuntimeSeconds: (data['totalRuntimeSeconds'] as num?)?.toInt() ?? 0,
+      energyConsumptionKwh: (data['energyConsumptionKwh'] as num?)?.toDouble() ?? 0.0,
     );
   }
 
@@ -201,6 +213,10 @@ class SwitchDevice {
       'timerActive': timerActive,
       'timerStartedAt': timerStartedAt != null ? Timestamp.fromDate(timerStartedAt!) : null,
       'timerDurationSeconds': timerDurationSeconds,
+      'lastHeartbeatAt': lastHeartbeatAt != null ? Timestamp.fromDate(lastHeartbeatAt!) : null,
+      'offlineSince': offlineSince != null ? Timestamp.fromDate(offlineSince!) : null,
+      'totalRuntimeSeconds': totalRuntimeSeconds,
+      'energyConsumptionKwh': energyConsumptionKwh,
     };
   }
 }

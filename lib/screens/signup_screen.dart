@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'login_screen.dart';
-import 'home_screen.dart';
 import '../services/auth_service.dart';
+
 
 class SignupScreen extends StatefulWidget {
   const SignupScreen({super.key});
@@ -77,44 +77,32 @@ class _SignupScreenState extends State<SignupScreen> {
         email: email,
         password: password,
         displayName: name,
+        requireEmailVerification: true,
       );
-
-      // Send email verification
-      try {
-        await _authService.sendEmailVerification();
-      } catch (e) {
-        debugPrint('Email verification sending error: $e');
-      }
 
       if (!mounted) return;
 
-      _showMessage('Account created! Verification link sent to $email.');
+      // Show verification dialog
+      _showVerificationDialog(email);
 
-      Navigator.pushAndRemoveUntil(
-        context,
-        MaterialPageRoute(
-          builder: (context) => const HomeScreen(),
-        ),
-        (route) => false,
-      );
     } on FirebaseAuthException catch (e) {
       String message;
 
       switch (e.code) {
         case 'email-already-in-use':
-          message = 'This email is already registered.';
+          message = 'An account with this email already exists.';
           break;
         case 'invalid-email':
           message = 'Please enter a valid email address.';
           break;
         case 'weak-password':
-          message = 'Password is too weak. Use at least 6 characters.';
+          message = 'Password is too weak. Please use a stronger password.';
           break;
         case 'operation-not-allowed':
-          message = 'Email/Password authentication is not enabled.';
+          message = 'Email/password accounts are not enabled.';
           break;
         default:
-          message = e.message ?? 'Registration failed. Please try again.';
+          message = e.message ?? 'Signup failed. Please try again.';
       }
 
       if (mounted) {
@@ -122,7 +110,7 @@ class _SignupScreenState extends State<SignupScreen> {
       }
     } catch (e) {
       if (mounted) {
-        _showMessage('Something went wrong. Please try again.');
+        _showMessage('Something went wrong: $e');
       }
     } finally {
       if (mounted) {
@@ -132,6 +120,82 @@ class _SignupScreenState extends State<SignupScreen> {
       }
     }
   }
+
+  void _showVerificationDialog(String email) {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) {
+        return AlertDialog(
+          backgroundColor: const Color(0xFF10293B),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: const Text(
+            'Verify Your Email',
+            style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(
+                Icons.email_outlined,
+                color: Color(0xFF5AA9FF),
+                size: 48,
+              ),
+              const SizedBox(height: 16),
+              Text(
+                'We\'ve sent a verification link to:',
+                style: TextStyle(color: Color(0xFF91A1AF), fontSize: 14),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                email,
+                style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w600),
+              ),
+              const SizedBox(height: 16),
+              Text(
+                'Please check your inbox and click the link to verify your account.',
+                style: TextStyle(color: Color(0xFF91A1AF), fontSize: 13),
+                textAlign: TextAlign.center,
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () async {
+                try {
+                  await _authService.sendEmailVerification();
+                  if (mounted) {
+                    _showMessage('Verification email resent!');
+                  }
+                } catch (e) {
+                  if (mounted) {
+                    _showMessage('Failed to resend email: $e');
+                  }
+                }
+              },
+              child: const Text('Resend Email', style: TextStyle(color: Color(0xFF5AA9FF))),
+            ),
+            ElevatedButton(
+              onPressed: () {
+                Navigator.pop(dialogContext);
+                Navigator.pushAndRemoveUntil(
+                  context,
+                  MaterialPageRoute(builder: (context) => const LoginScreen()),
+                  (route) => false,
+                );
+              },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF2F80ED),
+                foregroundColor: Colors.white,
+              ),
+              child: const Text('Continue to Login'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
 
   void _showMessage(String message) {
     if (!mounted) return;

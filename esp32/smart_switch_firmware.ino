@@ -37,6 +37,10 @@
   #define RELAY_ACTIVE_LOW    true
 #endif
 
+#ifndef DEVICE_SYNC_URL
+#define DEVICE_SYNC_URL "https://us-central1-iot-switch-23826.cloudfunctions.net/deviceSync"
+#endif
+
 // =============================================================================
 // CONSTANTS & TIMERS
 // =============================================================================
@@ -55,6 +59,18 @@ bool isWifiConnecting = false;
 
 // Anti-Replay & Freshness Tracking
 String lastProcessedTimestamp = "";
+unsigned long lastCommandNonce = 0;
+const unsigned long COMMAND_FRESHNESS_WINDOW_MS = 60000; // 60 seconds freshness window
+
+// Command idempotency tracking
+struct CommandHistory {
+  String commandId;
+  unsigned long timestamp;
+  bool executed;
+};
+const int COMMAND_HISTORY_SIZE = 10;
+CommandHistory commandHistory[COMMAND_HISTORY_SIZE];
+int commandHistoryIndex = 0;
 
 // Trusted Root CA Certificates for Google / Firebase Services (GTS Root R1 & GTS Root R4, Valid to 2036)
 const char* rootCACertificate = \
@@ -151,6 +167,26 @@ void maintainWiFi() {
 // =============================================================================
 // SECURE FIRESTORE REST API: FETCH AND VALIDATE COMMAND & STATE
 // =============================================================================
+unsigned long generateCommandNonce() {
+  return millis() + random(1000); // Generate unique nonce based on time + random
+}
+
+// Command idempotency check
+bool isCommandDuplicate(String commandId) {
+  for (int i = 0; i < COMMAND_HISTORY_SIZE; i++) {
+    if (commandHistory[i].commandId == commandId && 
+        (millis() - commandHistory[i].timestamp) < COMMAND_FRESHNESS_WINDOW_MS) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// Add command to history
+void addToCommandHistory(String commandId, bool executed) {
+  commandHistory[commandHistoryIndex] = {commandId, millis(), executed};
+  commandHistoryIndex = (commandHistoryIndex + 1) % COMMAND_HISTORY_SIZE;
+}
 void fetchSwitchState() {
   if (WiFi.status() != WL_CONNECTED) return;
 
@@ -158,14 +194,10 @@ void fetchSwitchState() {
   client.setCACert(rootCACertificate); // Enforce strict TLS certificate validation
 
   HTTPClient http;
-  
-  // Construct secure Firestore REST endpoint for this exact DEVICE_ID
-  String url = "https://firestore.googleapis.com/v1/projects/";
-  url += FIREBASE_PROJECT_ID;
-  url += "/databases/(default)/documents/switches/";
+
+  String url = String(DEVICE_SYNC_URL);
+  url += "?deviceId=";
   url += DEVICE_ID;
-  url += "?key=";
-  url += FIREBASE_API_KEY;
 
   if (http.begin(client, url)) {
     http.addHeader("Content-Type", "application/json");
@@ -176,45 +208,74 @@ void fetchSwitchState() {
 
     if (httpCode == HTTP_CODE_OK) {
       String payload = http.getString();
-      
-      // Parse Firestore JSON response
-      StaticJsonDocument<2048> doc;
+
+      StaticJsonDocument<1024> doc;
       DeserializationError error = deserializeJson(doc, payload);
 
       if (!error) {
-        JsonObject fields = doc["fields"];
-        if (!fields.isNull()) {
-          // --- STEP 1: HARDWARE DEVICE IDENTITY VERIFICATION ---
-          // Confirm that the returned document explicitly targets this DEVICE_ID
-          if (fields.containsKey("deviceId") && fields["deviceId"].containsKey("stringValue")) {
-            String incomingDeviceId = fields["deviceId"]["stringValue"].as<String>();
-            if (incomingDeviceId != DEVICE_ID) {
-              Serial.print(F("[SECURITY WARNING] Mismatched Device ID payload: "));
-              Serial.println(incomingDeviceId);
-              http.end();
-              return; // Reject foreign or spoofed device payload
-            }
+        if (doc.containsKey("deviceId")) {
+          String incomingDeviceId = doc["deviceId"].as<String>();
+          if (incomingDeviceId != DEVICE_ID) {
+            Serial.print(F("[SECURITY WARNING] Mismatched Device ID payload: "));
+            Serial.println(incomingDeviceId);
+            http.end();
+            return;
           }
+        }
 
-          // --- STEP 2: ANTI-REPLAY & FRESHNESS VALIDATION ---
-          if (fields.containsKey("lastUpdatedAt") && fields["lastUpdatedAt"].containsKey("timestampValue")) {
-            String timestamp = fields["lastUpdatedAt"]["timestampValue"].as<String>();
-            if (timestamp.length() > 0 && timestamp == lastProcessedTimestamp) {
-              // State has already been processed; no change needed
+        if (doc.containsKey("updatedAt")) {
+          String timestamp = doc["updatedAt"].as<String>();
+          if (timestamp.length() > 0 && timestamp == lastProcessedTimestamp) {
+            http.end();
+            return;
+          }
+          if (timestamp.length() > 0) {
+            lastProcessedTimestamp = timestamp;
+          }
+        }
+
+        // Anti-replay: Check command nonce if present
+        if (doc.containsKey("commandNonce")) {
+          unsigned long incomingNonce = doc["commandNonce"].as<unsigned long>();
+          if (incomingNonce <= lastCommandNonce) {
+            Serial.print(F("[SECURITY WARNING] Replay attack detected! Command nonce too low: "));
+            Serial.println(incomingNonce);
+            http.end();
+            return;
+          }
+          // Check freshness window
+          unsigned long currentTime = millis();
+          if (doc.containsKey("commandTimestamp")) {
+            unsigned long commandTime = doc["commandTimestamp"].as<unsigned long>();
+            if (currentTime - commandTime > COMMAND_FRESHNESS_WINDOW_MS) {
+              Serial.print(F("[SECURITY WARNING] Stale command detected! Timestamp too old: "));
+              Serial.println(commandTime);
               http.end();
               return;
             }
-            lastProcessedTimestamp = timestamp;
           }
+          lastCommandNonce = incomingNonce;
+        }
 
-          // --- STEP 3: STRICT COMMAND SCHEMA & BOOLEAN VALIDATION ---
-          if (fields.containsKey("isOn") && fields["isOn"].containsKey("booleanValue")) {
-            bool targetIsOn = fields["isOn"]["booleanValue"].as<bool>();
-            
-            // Apply authorized relay state
-            setRelayHardware(targetIsOn);
-          } else {
-            Serial.println(F("[SECURITY WARNING] Received malformed or missing 'isOn' boolean field."));
+        if (doc.containsKey("isOn") && doc["isOn"].is<bool>()) {
+          bool targetIsOn = doc["isOn"].as<bool>();
+          String commandId = doc.containsKey("commandId") ? doc["commandId"].as<String>() : String(millis());
+          
+          // Check for duplicate command (idempotency)
+          if (isCommandDuplicate(commandId)) {
+            Serial.print(F("[IDEMPOTENCY] Duplicate command detected: "));
+            Serial.println(commandId);
+            http.end();
+            return;
+          }
+          
+          setRelayHardware(targetIsOn);
+          addToCommandHistory(commandId, true);
+          sendCommandAcknowledgement(commandId, true);
+        } else {
+          Serial.println(F("[SECURITY WARNING] Received malformed or missing 'isOn' boolean field."));
+          if (doc.containsKey("commandId")) {
+            sendCommandAcknowledgement(doc["commandId"].as<String>(), false, "Invalid isOn field");
           }
         }
       } else {
@@ -224,7 +285,7 @@ void fetchSwitchState() {
     } else if (httpCode == 404) {
       Serial.println(F("[FIRESTORE] Device document not found."));
     } else if (httpCode == 403 || httpCode == 401) {
-      Serial.println(F("[AUTH ERROR] Unauthorized request. Check API configuration or security rules."));
+      Serial.println(F("[AUTH ERROR] Unauthorized request. Check DEVICE_SECRET_TOKEN and DEVICE_SECRETS."));
     } else {
       Serial.print(F("[HTTP] Error code: "));
       Serial.println(httpCode);
@@ -244,27 +305,89 @@ void sendHeartbeatTelemetry() {
 
   HTTPClient http;
 
-  String url = "https://firestore.googleapis.com/v1/projects/";
-  url += FIREBASE_PROJECT_ID;
-  url += "/databases/(default)/documents/switches/";
-  url += DEVICE_ID;
-  url += "?updateMask.fieldPaths=online&updateMask.fieldPaths=lastSyncAt&key=";
-  url += FIREBASE_API_KEY;
+  if (http.begin(client, DEVICE_SYNC_URL)) {
+    http.addHeader("Content-Type", "application/json");
+    http.addHeader("X-Device-ID", DEVICE_ID);
+    http.addHeader("X-Device-Secret", DEVICE_SECRET_TOKEN);
 
+    StaticJsonDocument<256> doc;
+    doc["deviceId"] = DEVICE_ID;
+    doc["online"] = true;
+    doc["lastCommandNonce"] = lastCommandNonce;
+    doc["currentRelayState"] = currentRelayState;
+
+    String requestBody;
+    serializeJson(doc, requestBody);
+
+    int httpCode = http.POST(requestBody);
+    if (httpCode == HTTP_CODE_OK) {
+      Serial.println(F("[HEARTBEAT] Telemetry synced successfully."));
+    }
+    http.end();
+  }
+}
+
+// =============================================================================
+// SEND COMMAND ACKNOWLEDGEMENT
+// =============================================================================
+void sendCommandAcknowledgement(String commandId, bool success, String error = "") {
+  if (WiFi.status() != WL_CONNECTED) return;
+
+  WiFiClientSecure client;
+  client.setCACert(rootCACertificate);
+
+  HTTPClient http;
+
+  String url = String(DEVICE_SYNC_URL);
+  url += "/ack";
+  
   if (http.begin(client, url)) {
     http.addHeader("Content-Type", "application/json");
     http.addHeader("X-Device-ID", DEVICE_ID);
     http.addHeader("X-Device-Secret", DEVICE_SECRET_TOKEN);
 
-    // Construct PATCH body for online status & timestamp
-    StaticJsonDocument<256> doc;
-    JsonObject fields = doc.createNestedObject("fields");
-    fields["online"]["booleanValue"] = true;
-    
+    StaticJsonDocument<512> doc;
+    doc["deviceId"] = DEVICE_ID;
+    doc["commandId"] = commandId;
+    doc["success"] = success;
+    doc["error"] = error;
+    doc["executedAt"] = millis();
+    doc["relayState"] = currentRelayState;
+
     String requestBody;
     serializeJson(doc, requestBody);
 
-    int httpCode = http.PATCH(requestBody);
+    int httpCode = http.POST(requestBody);
+    if (httpCode == HTTP_CODE_OK) {
+      Serial.println(F("[ACK] Command acknowledgement sent successfully."));
+    } else {
+      Serial.print(F("[ACK] Failed to send acknowledgement: "));
+      Serial.println(httpCode);
+    }
+    http.end();
+  }
+}
+void sendHeartbeatTelemetry() {
+  if (WiFi.status() != WL_CONNECTED) return;
+
+  WiFiClientSecure client;
+  client.setCACert(rootCACertificate); // Enforce strict TLS certificate validation
+
+  HTTPClient http;
+
+  if (http.begin(client, DEVICE_SYNC_URL)) {
+    http.addHeader("Content-Type", "application/json");
+    http.addHeader("X-Device-ID", DEVICE_ID);
+    http.addHeader("X-Device-Secret", DEVICE_SECRET_TOKEN);
+
+    StaticJsonDocument<256> doc;
+    doc["deviceId"] = DEVICE_ID;
+    doc["online"] = true;
+
+    String requestBody;
+    serializeJson(doc, requestBody);
+
+    int httpCode = http.POST(requestBody);
     if (httpCode == HTTP_CODE_OK) {
       Serial.println(F("[HEARTBEAT] Telemetry synced successfully."));
     }
@@ -291,6 +414,11 @@ void setup() {
 
   // Set initial safe relay state (OFF)
   setRelayHardware(false);
+
+  // Initialize command history
+  for (int i = 0; i < COMMAND_HISTORY_SIZE; i++) {
+    commandHistory[i] = {"", 0, false};
+  }
 
   // Initialize Hardware Watchdog Timer
   esp_task_wdt_config_t wdt_config = {
@@ -329,6 +457,25 @@ void loop() {
   if (currentMillis - lastHeartbeatTime >= HEARTBEAT_INTERVAL_MS) {
     lastHeartbeatTime = currentMillis;
     sendHeartbeatTelemetry();
+  }
+
+  // Offline recovery: sync state when coming back online
+  static bool wasOffline = false;
+  if (WiFi.status() == WL_CONNECTED) {
+    if (wasOffline) {
+      Serial.println(F("[OFFLINE RECOVERY] Connection restored, syncing state..."));
+      sendHeartbeatTelemetry();
+      wasOffline = false;
+    }
+  } else {
+    wasOffline = true;
+  }
+
+  // Relay state synchronization: periodically verify hardware state matches Firestore
+  static unsigned long lastSyncCheck = 0;
+  if (currentMillis - lastSyncCheck >= 60000) { // Check every minute
+    lastSyncCheck = currentMillis;
+    fetchSwitchState(); // Force state verification
   }
 
   // Non-blocking yield to allow background Wi-Fi / IP stack processing

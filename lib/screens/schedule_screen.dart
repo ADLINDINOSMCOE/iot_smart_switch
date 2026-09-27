@@ -4,10 +4,12 @@ import '../services/schedule_service.dart';
 
 class ScheduleScreen extends StatefulWidget {
   final List<Map<String, dynamic>> switches;
+  final VoidCallback onBack;
 
   const ScheduleScreen({
     super.key,
     required this.switches,
+    required this.onBack,
   });
 
   @override

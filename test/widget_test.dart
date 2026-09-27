@@ -1,6 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:iotswitch/models/switch_device.dart';
 import 'package:iotswitch/services/firestore_service.dart';
+import 'package:iotswitch/services/schedule_recurrence.dart';
 
 void main() {
   group('Security Architecture & Access Control Tests', () {
@@ -308,6 +309,42 @@ void main() {
       expect(isValidEmail('user@'), isFalse);
       expect(isValidEmail('@domain.com'), isFalse);
       expect(isValidEmail('user@domain'), isFalse);
+    });
+
+    test('17. Repeating weekday schedules compute the next matching day, not a one-shot run', () {
+      final wednesdayEvening = DateTime(2026, 9, 2, 19, 0); // Wed
+      final next = ScheduleRecurrence.computeFollowingRunAt(
+        justExecuted: wednesdayEvening,
+        hour: 19,
+        minute: 0,
+        days: ['Mon', 'Wed', 'Fri'],
+      );
+      expect(next, DateTime(2026, 9, 4, 19, 0)); // Friday
+      expect(ScheduleRecurrence.weekdayLabel(next), 'Fri');
+    });
+
+    test('18. Daily schedules advance exactly one day', () {
+      final start = DateTime(2026, 9, 2, 7, 0);
+      final next = ScheduleRecurrence.computeFollowingRunAt(
+        justExecuted: start,
+        hour: 7,
+        minute: 0,
+        days: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'],
+      );
+      expect(next, DateTime(2026, 9, 3, 7, 0));
+      expect(ScheduleRecurrence.isDaily(['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']), isTrue);
+    });
+
+    test('19. Empty days are treated as one-time (next clock time only)', () {
+      expect(ScheduleRecurrence.isOneTime([]), isTrue);
+      final from = DateTime(2026, 9, 2, 18, 0);
+      final next = ScheduleRecurrence.computeNextRunAt(
+        hour: 19,
+        minute: 0,
+        days: const [],
+        from: from,
+      );
+      expect(next, DateTime(2026, 9, 2, 19, 0));
     });
   });
 }

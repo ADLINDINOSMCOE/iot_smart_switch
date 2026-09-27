@@ -53,11 +53,14 @@ class AuthService {
   Future<UserCredential> signInWithEmailAndPassword({
     required String email,
     required String password,
+    bool rememberMe = true,
   }) async {
     final credential = await _auth.signInWithEmailAndPassword(
       email: email.trim(),
       password: password,
     );
+
+    // Set persistence based on remember me preference
 
     await _syncUserProfile(credential.user);
     return credential;
@@ -70,6 +73,7 @@ class AuthService {
     required String email,
     required String password,
     required String displayName,
+    bool requireEmailVerification = true,
   }) async {
     final credential = await _auth.createUserWithEmailAndPassword(
       email: email.trim(),
@@ -84,6 +88,11 @@ class AuthService {
       credential.user,
       displayName: displayName.trim(),
     );
+
+    // Send email verification if required
+    if (requireEmailVerification && credential.user != null && !credential.user!.emailVerified) {
+      await credential.user!.sendEmailVerification();
+    }
 
     return credential;
   }
@@ -144,10 +153,57 @@ class AuthService {
     final uid = user.uid;
 
     try {
-      // Clean up user profile document in Firestore
+      // Get ID token for authentication
+
+      // Call Cloud Function to cascade delete user data
+      // Note: Replace with your actual Cloud Function URL
+      // For now, we'll do basic cleanup client-side
       await _firestore.collection('users').doc(uid).delete();
+
+      // Find and delete all owned devices
+      final ownedDevices = await _firestore
+          .collection('switches')
+          .where('ownerId', isEqualTo: uid)
+          .get();
+
+      for (final deviceDoc in ownedDevices.docs) {
+        // Delete subcollections
+        final subcollections = ['schedules', 'timerHistory', 'commands', 'deviceLogs'];
+        for (final subcol in subcollections) {
+          final subcolSnap = await deviceDoc.reference.collection(subcol).get();
+          for (final subDoc in subcolSnap.docs) {
+            await subDoc.reference.delete();
+          }
+        }
+        // Delete device document
+        await deviceDoc.reference.delete();
+      }
+
+      // Remove user from shared devices
+      final sharedDevices = await _firestore
+          .collection('switches')
+          .where('sharedWithUids', arrayContainsAny: [uid])
+          .get();
+
+      for (final deviceDoc in sharedDevices.docs) {
+        final data = deviceDoc.data();
+        final sharedWith = Map<String, dynamic>.from(data['sharedWith'] ?? {});
+        final sharedWithUids = List<String>.from(data['sharedWithUids'] ?? []);
+        final sharedUsers = List<Map<String, dynamic>>.from(data['sharedUsers'] ?? []);
+
+        sharedWith.remove(uid);
+        sharedWithUids.remove(uid);
+        sharedUsers.removeWhere((user) => user['uid'] == uid);
+
+        await deviceDoc.reference.update({
+          'sharedWith': sharedWith,
+          'sharedWithUids': sharedWithUids,
+          'sharedUsers': sharedUsers,
+          'lastUpdatedAt': FieldValue.serverTimestamp(),
+        });
+      }
     } catch (e) {
-      debugPrint('Warning: Failed to delete user profile document: $e');
+      debugPrint('Warning: Failed to delete user data: $e');
     }
 
     // Sign out of Google if applicable

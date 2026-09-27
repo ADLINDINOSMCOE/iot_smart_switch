@@ -54,6 +54,7 @@ class _LoginScreenState extends State<LoginScreen> {
       await _authService.signInWithEmailAndPassword(
         email: email,
         password: password,
+        rememberMe: _rememberMe,
       );
 
       if (!mounted) return;
@@ -83,6 +84,9 @@ class _LoginScreenState extends State<LoginScreen> {
           break;
         case 'too-many-requests':
           message = 'Too many attempts. Please try again later.';
+          break;
+        case 'network-request-failed':
+          message = 'Network error. Please check your connection.';
           break;
         default:
           message = e.message ?? 'Login failed. Please try again.';
